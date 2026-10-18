@@ -1,5 +1,5 @@
 import { env } from 'cloudflare:workers';
-type State = {phase:string;batch:number;side:number;heat:number;until:number;tick:number;results:string[];players:number[];lastFan?:number};
+type State = {phase:string;batch:number;side:number;heat:number;until:number;tick:number;results:string[];players:number[];lastFan?:number;fanPosition?:number;fanSeq?:number};
 const fresh=():State=>({phase:'lobby',batch:0,side:0,heat:20,until:0,tick:Date.now()/1000,results:[],players:[0]});
 function update(s:State){const now=Date.now()/1000;
  if(s.phase==='countdown'&&now>=s.until){s.tick=s.until;s.until+=10;s.phase='cooking';}
@@ -16,7 +16,7 @@ export async function GET(request:Request){
  const s=JSON.parse(row.data);update(s);return reply({...s,serverTime:Date.now()/1000});
 }
 export async function POST(request:Request){
- const d=await request.json() as {action:string;room?:string;player?:number;amount?:number};
+ const d=await request.json() as {action:string;room?:string;player?:number;amount?:number;position?:number;seq?:number};
  if(d.action==='create'){
   const code=crypto.randomUUID().replaceAll('-','').slice(0,6).toUpperCase();
   await env.DB.prepare('INSERT INTO rooms (code,data,revision) VALUES (?,?,0)').bind(code,JSON.stringify(fresh())).run();
@@ -33,10 +33,11 @@ export async function POST(request:Request){
   }
   if(d.action==='start'&&(s.phase==='lobby'||(s.phase==='result'&&s.batch===0))){
    if(s.phase==='result'){s.batch=1;s.side=0;}
-   s.phase='countdown';s.until=Date.now()/1000+3;s.heat=20;s.lastFan=0;
+   s.phase='countdown';s.until=Date.now()/1000+3;s.heat=20;s.lastFan=0;s.fanPosition=0;s.fanSeq=0;
   }
+  if(d.action==='fan'&&p===s.batch&&s.phase==='cooking'&&Number(d.seq)>(s.fanSeq||0)){s.fanPosition=Math.max(-1,Math.min(1,Number(d.position)||0));s.fanSeq=Number(d.seq);s.lastFan=Date.now()/1000;s.heat=Math.min(100,s.heat+Math.min(9,Math.max(0,Number(d.amount)||0)));}
   if(d.action==='swipe'&&p===s.batch&&s.phase==='cooking'){s.heat=Math.min(100,s.heat+Math.min(9,Math.max(0,Number(d.amount)||0)));s.lastFan=Date.now()/1000;}
-  if(d.action==='flip'&&p===1-s.batch&&s.phase==='flip'){s.side=1;s.phase='countdown';s.until=Date.now()/1000+3;s.heat=20;s.lastFan=0;}
+  if(d.action==='flip'&&p===1-s.batch&&s.phase==='flip'){s.side=1;s.phase='countdown';s.until=Date.now()/1000+3;s.heat=20;s.lastFan=0;s.fanPosition=0;s.fanSeq=0;}
   if(d.action==='reset'){const players=s.players;s=fresh();s.players=players;}
   const saved=await env.DB.prepare('UPDATE rooms SET data=?, revision=revision+1 WHERE code=? AND revision=?').bind(JSON.stringify(s),code,row.revision).run();
   if(saved.meta.changes)return reply(d.action==='join'?{room:code,player:1}:{...s,serverTime:Date.now()/1000});
